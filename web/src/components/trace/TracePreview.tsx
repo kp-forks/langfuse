@@ -1,5 +1,5 @@
 import { JSONView } from "@/src/components/ui/CodeJsonViewer";
-import { type Trace, type Score, type ScoreSource } from "@langfuse/shared";
+import { type Trace, type ScoreSource } from "@langfuse/shared";
 import {
   Card,
   CardContent,
@@ -18,7 +18,9 @@ import { Tabs, TabsList, TabsTrigger } from "@/src/components/ui/tabs";
 import { withDefault, StringParam, useQueryParam } from "use-query-params";
 import ScoresTable from "@/src/components/table/use-cases/scores";
 import { ScoresPreview } from "@/src/components/trace/ScoresPreview";
-import { AnnotateDrawer } from "@/src/features/manual-scoring/components/AnnotateDrawer";
+import { AnnotateDrawer } from "@/src/features/scores/components/AnnotateDrawer";
+import { type APIScore } from "@/src/features/public-api/types/scores";
+import useLocalStorage from "@/src/components/useLocalStorage";
 
 export const TracePreview = ({
   trace,
@@ -27,12 +29,15 @@ export const TracePreview = ({
 }: {
   trace: Trace & { latency?: number };
   observations: ObservationReturnType[];
-  scores: Score[];
+  scores: APIScore[];
 }) => {
   const [selectedTab, setSelectedTab] = useQueryParam(
     "view",
     withDefault(StringParam, "preview"),
   );
+  const [emptySelectedConfigIds, setEmptySelectedConfigIds] = useLocalStorage<
+    string[]
+  >("emptySelectedConfigIds", []);
 
   const traceScores = scores.filter((s) => s.observationId === null);
   const traceScoresBySource = traceScores.reduce((acc, score) => {
@@ -41,7 +46,7 @@ export const TracePreview = ({
     }
     acc.get(score.source)?.push(score);
     return acc;
-  }, new Map<ScoreSource, Score[]>());
+  }, new Map<ScoreSource, APIScore[]>());
 
   return (
     <Card className="col-span-2 flex max-h-full flex-col overflow-hidden">
@@ -99,6 +104,9 @@ export const TracePreview = ({
               projectId={trace.projectId}
               traceId={trace.id}
               scores={scores}
+              emptySelectedConfigIds={emptySelectedConfigIds}
+              setEmptySelectedConfigIds={setEmptySelectedConfigIds}
+              key={"annotation-drawer" + trace.id}
             />
             <NewDatasetItemFromTrace
               traceId={trace.id}

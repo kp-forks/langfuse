@@ -2,11 +2,7 @@ import { type z } from "zod";
 
 import { protectedProjectProcedure } from "@/src/server/api/trpc";
 import { paginationZod } from "@langfuse/shared";
-import {
-  type ObservationView,
-  Prisma,
-  type ScoreDataType,
-} from "@langfuse/shared/src/db";
+import { Prisma } from "@langfuse/shared/src/db";
 
 import { GenerationTableOptions } from "./utils/GenerationTableOptions";
 import { getAllGenerations } from "@/src/server/api/routers/generations/db/getAllGenerationsSqlQuery";
@@ -15,29 +11,13 @@ const getAllGenerationsInput = GenerationTableOptions.extend({
   ...paginationZod,
 });
 
-export type ScoreSimplified = {
-  name: string;
-  value: number;
-  dataType: ScoreDataType;
-  stringValue?: string | null;
-  comment?: string | null;
-};
-
 export type GetAllGenerationsInput = z.infer<typeof getAllGenerationsInput>;
-
-export type ObservationViewWithScores = ObservationView & {
-  traceId: string | null;
-  traceName: string | null;
-  promptName: string | null;
-  promptVersion: string | null;
-  scores: ScoreSimplified[] | null;
-};
 
 export const getAllQuery = protectedProjectProcedure
   .input(getAllGenerationsInput)
   .query(async ({ input, ctx }) => {
     const { generations, datetimeFilter, filterCondition, searchCondition } =
-      await getAllGenerations({ input, selectIO: false });
+      await getAllGenerations({ input, selectIOAndMetadata: false });
 
     const totalGenerations = await ctx.prisma.$queryRaw<
       Array<{ count: bigint }>
@@ -61,6 +41,7 @@ export const getAllQuery = protectedProjectProcedure
                 scores."project_id" = ${input.projectId}
                 AND scores."trace_id" = t.id
                 AND scores."observation_id" = o.id
+                AND scores."data_type" IN ('NUMERIC', 'BOOLEAN')
             GROUP BY
                 name
         ) tmp

@@ -1,5 +1,5 @@
 import { JSONView } from "@/src/components/ui/CodeJsonViewer";
-import { type ScoreSource, type Score } from "@langfuse/shared";
+import { type ScoreSource } from "@langfuse/shared";
 import {
   Card,
   CardContent,
@@ -21,12 +21,14 @@ import { withDefault, StringParam, useQueryParam } from "use-query-params";
 import ScoresTable from "@/src/components/table/use-cases/scores";
 import { ScoresPreview } from "@/src/components/trace/ScoresPreview";
 import { JumpToPlaygroundButton } from "@/src/ee/features/playground/page/components/JumpToPlaygroundButton";
-import { AnnotateDrawer } from "@/src/features/manual-scoring/components/AnnotateDrawer";
+import { AnnotateDrawer } from "@/src/features/scores/components/AnnotateDrawer";
+import { type APIScore } from "@/src/features/public-api/types/scores";
+import useLocalStorage from "@/src/components/useLocalStorage";
 
 export const ObservationPreview = (props: {
   observations: Array<ObservationReturnType>;
   projectId: string;
-  scores: Score[];
+  scores: APIScore[];
   currentObservationId: string;
   traceId: string;
 }) => {
@@ -34,6 +36,9 @@ export const ObservationPreview = (props: {
     "view",
     withDefault(StringParam, "preview"),
   );
+  const [emptySelectedConfigIds, setEmptySelectedConfigIds] = useLocalStorage<
+    string[]
+  >("emptySelectedConfigIds", []);
 
   const observationWithInputAndOutput = api.observations.byId.useQuery({
     observationId: props.currentObservationId,
@@ -59,7 +64,7 @@ export const ObservationPreview = (props: {
     }
     acc.get(score.source)?.push(score);
     return acc;
-  }, new Map<ScoreSource, Score[]>());
+  }, new Map<ScoreSource, APIScore[]>());
 
   return (
     <Card className="col-span-2 flex max-h-full flex-col overflow-hidden">
@@ -147,7 +152,11 @@ export const ObservationPreview = (props: {
                     .filter(Boolean)
                     .map(([key, value]) => (
                       <Badge variant="outline" key={key}>
-                        {key}: {value?.toString()}
+                        {key}:{" "}
+                        {Object.prototype.toString.call(value) ===
+                        "[object Object]"
+                          ? JSON.stringify(value)
+                          : value?.toString()}
                       </Badge>
                     ))
                 : null}
@@ -159,7 +168,10 @@ export const ObservationPreview = (props: {
               traceId={preloadedObservation.traceId}
               observationId={preloadedObservation.id}
               scores={props.scores}
+              emptySelectedConfigIds={emptySelectedConfigIds}
+              setEmptySelectedConfigIds={setEmptySelectedConfigIds}
               type="observation"
+              key={"annotation-drawer" + preloadedObservation.id}
             />
             {observationWithInputAndOutput.data?.type === "GENERATION" && (
               <JumpToPlaygroundButton

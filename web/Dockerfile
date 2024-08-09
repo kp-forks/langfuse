@@ -1,26 +1,24 @@
-FROM --platform=${BUILDPLATFORM:-linux/amd64} node:20-alpine3.20 AS alpine
+FROM --platform=${TARGETPLATFORM:-linux/amd64} node:20-alpine3.20 AS alpine
 
 # It's important to update the index before installing packages to ensure you're getting the latest versions.
 # Check https://github.com/nodejs/docker-node/tree/b4117f9333da4138b03a546ec926ef50a31506c3#nodealpine to understand why libc6-compat might be needed.
 RUN apk update && apk upgrade --no-cache libcrypto3 libssl3 libc6-compat busybox ssl_client
 
-FROM --platform=${BUILDPLATFORM:-linux/amd64} alpine AS base
-RUN npm install turbo@^1.13.3 --global
+FROM --platform=${TARGETPLATFORM:-linux/amd64} alpine AS base
+RUN npm install turbo@^1.13.4 --global
 ENV PNPM_HOME="/pnpm"
 ENV PATH="$PNPM_HOME:$PATH"
 RUN corepack enable
-RUN corepack prepare pnpm@8.15.5 --activate
+RUN corepack prepare pnpm@9.5.0 --activate
 
-
-FROM --platform=${BUILDPLATFORM:-linux/amd64} base AS pruner
+FROM --platform=${TARGETPLATFORM:-linux/amd64} base AS pruner
 
 WORKDIR /app
 
 COPY . .
 RUN turbo prune --scope=web --docker
 
-
-FROM --platform=${BUILDPLATFORM:-linux/amd64} base AS builder
+FROM --platform=${TARGETPLATFORM:-linux/amd64} base AS builder
 
 WORKDIR /app
 
@@ -32,6 +30,7 @@ COPY --from=pruner /app/out/json/ .
 RUN pnpm install --frozen-lockfile
 
 ENV DOCKER_BUILD 1
+ENV NEXT_MANUAL_SIG_HANDLE true
 
 # pass public variables in build step
 ARG NEXT_PUBLIC_LANGFUSE_CLOUD_REGION
@@ -53,13 +52,12 @@ RUN rm -f ./web/src/middleware.ts
 # Learn more here: https://nextjs.org/telemetry
 # Uncomment the following line in case you want to disable telemetry during the build.
 ENV NEXT_TELEMETRY_DISABLED 1
+ENV NEXT_MANUAL_SIG_HANDLE true
 
 RUN turbo run build --filter=web
 
 # Production image, copy all the files and run next
 FROM --platform=${TARGETPLATFORM:-linux/amd64} base AS runner
-
-RUN apk add --no-cache dumb-init
 
 WORKDIR /app
 
@@ -68,12 +66,15 @@ ENV NODE_ENV production
 ENV NEXT_TELEMETRY_DISABLED 1
 # Needed to re-enable validation of environment variables during runtime
 ENV DOCKER_BUILD 0
+# Set NEXT_MANUAL_SIG_HANDLE for runtime
+ENV NEXT_MANUAL_SIG_HANDLE true
+
+RUN apk add --no-cache dumb-init
 
 RUN addgroup --system --gid 1001 nodejs
 RUN adduser --system --uid 1001 nextjs
 
-RUN npm install -g --no-package-lock --no-save prisma
-
+RUN npm install -g --no-package-lock --no-save prisma@5.13.0
 
 COPY --from=builder --chown=nextjs:nodejs /app/web/next.config.mjs .
 COPY --from=builder --chown=nextjs:nodejs /app/web/package.json .
@@ -95,5 +96,8 @@ USER nextjs
 # Default port to 3000
 ENV PORT 3000
 
-# CMD ["node", "server.js"]
-CMD ["dumb-init", "--", "./web/entrypoint.sh"]
+
+ENTRYPOINT ["dumb-init", "--", "./web/entrypoint.sh"]
+
+# startup command
+CMD ["node", "./web/server.js"]

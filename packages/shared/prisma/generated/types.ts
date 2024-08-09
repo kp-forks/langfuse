@@ -121,15 +121,16 @@ export type CronJobs = {
 };
 export type Dataset = {
     id: string;
+    project_id: string;
     name: string;
     description: string | null;
     metadata: unknown | null;
-    project_id: string;
     created_at: Generated<Timestamp>;
     updated_at: Generated<Timestamp>;
 };
 export type DatasetItem = {
     id: string;
+    project_id: string;
     status: Generated<DatasetStatus>;
     input: unknown | null;
     expected_output: unknown | null;
@@ -142,6 +143,7 @@ export type DatasetItem = {
 };
 export type DatasetRunItems = {
     id: string;
+    project_id: string;
     dataset_run_id: string;
     dataset_item_id: string;
     trace_id: string;
@@ -151,6 +153,7 @@ export type DatasetRunItems = {
 };
 export type DatasetRuns = {
     id: string;
+    project_id: string;
     name: string;
     description: string | null;
     metadata: unknown | null;
@@ -286,7 +289,7 @@ export type ObservationView = {
     trace_id: string | null;
     project_id: string;
     type: ObservationType;
-    start_time: Generated<Timestamp>;
+    start_time: Timestamp;
     end_time: Timestamp | null;
     name: string | null;
     metadata: unknown | null;
@@ -294,7 +297,8 @@ export type ObservationView = {
     level: Generated<ObservationLevel>;
     status_message: string | null;
     version: string | null;
-    created_at: Generated<Timestamp>;
+    created_at: Timestamp;
+    updated_at: Timestamp;
     model: string | null;
     modelParameters: unknown | null;
     input: unknown | null;
@@ -305,6 +309,8 @@ export type ObservationView = {
     unit: string | null;
     completion_start_time: Timestamp | null;
     prompt_id: string | null;
+    prompt_name: string | null;
+    prompt_version: number | null;
     model_id: string | null;
     input_price: string | null;
     output_price: string | null;
@@ -357,7 +363,7 @@ export type Score = {
     timestamp: Generated<Timestamp>;
     project_id: string;
     name: string;
-    value: number;
+    value: number | null;
     source: ScoreSource;
     author_user_id: string | null;
     comment: string | null;
@@ -438,6 +444,8 @@ export type TraceView = {
     input: unknown | null;
     output: unknown | null;
     session_id: string | null;
+    created_at: Timestamp;
+    updated_at: Timestamp;
     duration: number | null;
 };
 export type User = {

@@ -9,7 +9,7 @@ import { evaluate, createEvalJobs } from "../features/evaluation/eval-service";
 import { kyselyPrisma } from "@langfuse/shared/src/db";
 import logger from "../logger";
 import { sql } from "kysely";
-import { redis } from "../redis";
+import { redis } from "@langfuse/shared/src/server";
 import { instrumentAsync } from "../instrumentation";
 import * as Sentry from "@sentry/node";
 
@@ -26,7 +26,7 @@ export const evalJobCreator = redis
   ? new Worker<TQueueJobTypes[QueueName.TraceUpsert]>(
       QueueName.TraceUpsert,
       async (job: Job<TQueueJobTypes[QueueName.TraceUpsert]>) => {
-        return instrumentAsync({ name: "evalJobCreator" }, async (span) => {
+        return instrumentAsync({ name: "evalJobCreator" }, async () => {
           try {
             await createEvalJobs({ event: job.data.payload });
             return true;
@@ -37,8 +37,6 @@ export const evalJobCreator = redis
             );
             Sentry.captureException(e);
             throw e;
-          } finally {
-            span?.end();
           }
         });
       },
@@ -58,7 +56,7 @@ export const evalJobExecutor = redis
   ? new Worker<TQueueJobTypes[QueueName.EvaluationExecution]>(
       QueueName.EvaluationExecution,
       async (job: Job<TQueueJobTypes[QueueName.EvaluationExecution]>) => {
-        return instrumentAsync({ name: "evalJobExecutor" }, async (span) => {
+        return instrumentAsync({ name: "evalJobExecutor" }, async () => {
           try {
             logger.info("Executing Evaluation Execution Job", job.data);
             await evaluate({ event: job.data.payload });
@@ -92,8 +90,6 @@ export const evalJobExecutor = redis
             }
 
             throw e;
-          } finally {
-            span?.end();
           }
         });
       },

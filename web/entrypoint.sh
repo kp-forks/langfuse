@@ -20,7 +20,7 @@ if [ -z "$DIRECT_URL" ]; then
 fi
 
 # Always execute the scripts, except when disabled.
-if [ "$LANFUSE_WEB_MIGRATION_DISABLED" != "true" ]; then
+if [ "$LANGFUSE_AUTO_POSTGRES_MIGRATION_DISABLED" != "true" ]; then
     prisma db execute --url "$DIRECT_URL" --file "./packages/shared/scripts/cleanup.sql"
 
     # Apply migrations
@@ -35,5 +35,5 @@ if [ $status -ne 0 ]; then
     exit $status
 fi
 
-# Start server
-node web/server.js
+# Run the command passed to the docker image on start
+exec "$@"

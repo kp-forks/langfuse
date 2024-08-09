@@ -1,19 +1,25 @@
 import {
   type AuthHeaderVerificationResult,
-  verifyAuthHeaderAndReturnScope,
+  ApiAuthService,
 } from "@/src/features/public-api/server/apiAuth";
 import { cors, runMiddleware } from "@/src/features/public-api/server/cors";
 import { prisma } from "@langfuse/shared/src/db";
 import { type NextApiRequest, type NextApiResponse } from "next";
 import { z } from "zod";
 import {
-  type ingestionApiSchema,
-  eventTypes,
-  ingestionEvent,
   type TraceUpsertEventType,
   type EventBodyType,
   EventName,
+  LangfuseNotFoundError,
+  InternalServerError,
 } from "@langfuse/shared";
+import {
+  type ingestionApiSchema,
+  convertTraceUpsertEventsToRedisEvents,
+  eventTypes,
+  getTraceUpsertQueue,
+  ingestionEvent,
+} from "@langfuse/shared/src/server";
 import { type ApiAccessScope } from "@/src/features/public-api/server/types";
 import { persistEventMiddleware } from "@/src/server/api/services/event-service";
 import { backOff } from "exponential-backoff";
@@ -32,12 +38,16 @@ import * as Sentry from "@sentry/nextjs";
 import { isPrismaException } from "@/src/utils/exceptions";
 import { env } from "@/src/env.mjs";
 import {
-  ValidationError,
+  InvalidRequestError,
   MethodNotAllowedError,
   BaseError,
   ForbiddenError,
   UnauthorizedError,
 } from "@langfuse/shared";
+import { redis } from "@langfuse/shared/src/server";
+
+import { isSigtermReceived } from "@/src/utils/shutdown";
+import { WorkerClient } from "@/src/server/api/services/WorkerClient";
 
 export const config = {
   api: {
@@ -63,9 +73,10 @@ export default async function handler(
     if (req.method !== "POST") throw new MethodNotAllowedError();
 
     // CHECK AUTH FOR ALL EVENTS
-    const authCheck = await verifyAuthHeaderAndReturnScope(
-      req.headers.authorization,
-    );
+    const authCheck = await new ApiAuthService(
+      prisma,
+      redis,
+    ).verifyAuthHeaderAndReturnScope(req.headers.authorization);
 
     if (!authCheck.validKey) throw new UnauthorizedError(authCheck.error);
 
@@ -80,6 +91,8 @@ export default async function handler(
       "ingestion_event",
       parsedSchema.success ? parsedSchema.data.batch.length : 0,
     );
+
+    await gaugePrismaStats();
 
     if (!parsedSchema.success) {
       console.log("Invalid request data", parsedSchema.error);
@@ -102,7 +115,7 @@ export default async function handler(
                   ? event.id
                   : "unknown"
                 : "unknown",
-            error: new ValidationError(parsed.error.message),
+            error: new InvalidRequestError(parsed.error.message),
           });
           return undefined;
         } else {
@@ -115,6 +128,17 @@ export default async function handler(
     await telemetry();
 
     const sortedBatch = sortBatch(filteredBatch);
+
+    if (env.LANGFUSE_ASYNC_INGESTION_PROCESSING === "true") {
+      // this function MUST NOT return but send the HTTP response directly
+      console.log("Returning http response early");
+      handleBatchResult(
+        validationErrors, // we are not sending additional server errors to the client in case of early return
+        sortedBatch.map((event) => ({ id: event.id, result: event })),
+        res,
+      );
+    }
+
     const result = await handleBatch(
       sortedBatch,
       parsedSchema.data.metadata,
@@ -128,15 +152,17 @@ export default async function handler(
       authCheck.scope.projectId,
     );
 
-    handleBatchResult(
-      [...validationErrors, ...result.errors],
-      result.results,
-      res,
-    );
+    //  in case we did not return early, we return the result here
+    if (env.LANGFUSE_ASYNC_INGESTION_PROCESSING === "false") {
+      handleBatchResult(
+        [...validationErrors, ...result.errors],
+        result.results,
+        res,
+      );
+    }
   } catch (error: unknown) {
-    console.error("error handling ingestion event", error);
-
     if (!(error instanceof UnauthorizedError)) {
+      console.error("error_handling_ingestion_event", error);
       Sentry.captureException(error);
     }
 
@@ -200,7 +226,9 @@ export const handleBatch = async (
   req: NextApiRequest,
   authCheck: AuthHeaderVerificationResult,
 ) => {
-  console.log(`handling ingestion ${events.length} events`);
+  console.log(
+    `handling ingestion ${events.length} events ${isSigtermReceived() ? "after SIGTERM" : ""}`,
+  );
 
   if (!authCheck.validKey) throw new UnauthorizedError(authCheck.error);
 
@@ -232,8 +260,22 @@ export const handleBatch = async (
       console.error("Error handling event:", error);
       // Decide how to handle the error: rethrow, continue, or push an error object to results
       // For example, push an error object:
-      errors.push({ error: error, id: singleEvent.id, type: singleEvent.type });
+      errors.push({
+        error: error,
+        id: singleEvent.id,
+        type: singleEvent.type,
+      });
     }
+  }
+
+  if (env.CLICKHOUSE_URL) {
+    await new WorkerClient()
+      .sendIngestionBatch({
+        batch: events,
+        metadata,
+        projectId: authCheck.scope.projectId,
+      })
+      .catch(); // Ignore errors while testing the ingestion via worker
   }
 
   return { results, errors };
@@ -241,7 +283,7 @@ export const handleBatch = async (
 
 async function retry<T>(request: () => Promise<T>): Promise<T> {
   return await backOff(request, {
-    numOfAttempts: 3,
+    numOfAttempts: env.LANGFUSE_ASYNC_INGESTION_PROCESSING === "true" ? 5 : 3,
     retry: (e: Error, attemptNumber: number) => {
       if (e instanceof UnauthorizedError || e instanceof ForbiddenError) {
         console.log("not retrying auth error");
@@ -252,9 +294,12 @@ async function retry<T>(request: () => Promise<T>): Promise<T> {
     },
   });
 }
-export const getBadRequestError = (errors: Array<unknown>): ValidationError[] =>
+export const getBadRequestError = (
+  errors: Array<unknown>,
+): InvalidRequestError[] =>
   errors.filter(
-    (error): error is ValidationError => error instanceof ValidationError,
+    (error): error is InvalidRequestError =>
+      error instanceof InvalidRequestError,
   );
 
 export const getResourceNotFoundError = (
@@ -266,7 +311,7 @@ export const getResourceNotFoundError = (
   );
 
 export const hasBadRequestError = (errors: Array<unknown>) =>
-  errors.some((error) => error instanceof ValidationError);
+  errors.some((error) => error instanceof InvalidRequestError);
 
 const handleSingleEvent = async (
   event: z.infer<typeof ingestionEvent>,
@@ -286,6 +331,7 @@ const handleSingleEvent = async (
     const { output, ...rest } = restEvent;
     restEvent = rest;
   }
+
   console.log(
     `handling single event ${event.id} of type ${event.type}:  ${JSON.stringify({ body: restEvent })}`,
   );
@@ -351,7 +397,7 @@ export const handleBatchResult = (
   }[] = [];
 
   errors.forEach((error) => {
-    if (error.error instanceof ValidationError) {
+    if (error.error instanceof InvalidRequestError) {
       returnedErrors.push({
         id: error.id,
         status: 400,
@@ -398,37 +444,79 @@ export const handleBatchResult = (
   return res.status(207).send({ errors: returnedErrors, successes });
 };
 
-export const handleBatchResultLegacy = (
+/**
+ * Handle single event which is usually send via /ingestion endpoint. Returns errors and results via `res` directly.
+ *
+ * Use `parseSingleTypedIngestionApiResponse` for a typed version of this function that throws `BaseError`.
+ */
+export const handleSingleIngestionObject = (
   errors: Array<{ id: string; error: unknown }>,
   results: Array<{ id: string; result: unknown }>,
   res: NextApiResponse,
 ) => {
-  const unknownErrors = errors.map((error) => error.error);
+  try {
+    // use method untyped for backwards compatibility
+    const parsedResult = parseSingleTypedIngestionApiResponse(errors, results);
 
+    return res.status(200).json(parsedResult);
+  } catch (error) {
+    if (error instanceof BaseError) {
+      return res.status(error.httpCode).json({
+        message: error.message,
+        error: error.name,
+      });
+    }
+    return res.status(500).json({
+      message: "Internal Server Error",
+      error:
+        error instanceof Error ? error.message : "An unknown error occurred",
+    });
+  }
+};
+
+/**
+ * Parses the response from the ingestion batch API event processor and throws an error of `BaserError` if the response is not as expected.
+ *
+ * @param errors - Array of errors from `handleBatch()`
+ * @param results - Array of results from `handleBatch()`
+ * @param object - Zod object to parse the result, if not provided, the result is returned as is without parsing
+ * @returns - Parsed result
+ * @throws - Throws an error of type `BaseError` if there are errors in the arguments
+ */
+
+export const parseSingleTypedIngestionApiResponse = <T extends z.ZodTypeAny>(
+  errors: Array<{ id: string; error: unknown }>,
+  results: Array<{ id: string; result: unknown }>,
+  object?: T,
+): T extends z.ZodTypeAny ? z.infer<T> : unknown => {
+  const unknownErrors = errors.map((error) => error.error);
   const badRequestErrors = getBadRequestError(unknownErrors);
   if (badRequestErrors.length > 0) {
-    console.log("Bad request errors", badRequestErrors);
-    return res.status(400).json({
-      message: "Invalid request data",
-      errors: badRequestErrors.map((error) => error.message),
-    });
+    throw new InvalidRequestError(badRequestErrors[0].message);
   }
-
   const ResourceNotFoundError = getResourceNotFoundError(unknownErrors);
   if (ResourceNotFoundError.length > 0) {
-    return res.status(404).json({
-      message: "Resource not found",
-      errors: ResourceNotFoundError.map((error) => error.message),
-    });
+    throw new LangfuseNotFoundError(ResourceNotFoundError[0].message);
+  }
+  if (errors.length > 0) {
+    throw new InternalServerError("Internal Server Error");
   }
 
-  if (errors.length > 0) {
-    console.log("Error processing events", unknownErrors);
-    return res.status(500).json({
-      errors: ["Internal Server Error"],
-    });
+  if (results.length === 0) {
+    throw new InternalServerError("No results returned");
   }
-  return res.status(200).send(results.length > 0 ? results[0]?.result : {});
+
+  if (object === undefined) {
+    return results[0].result as T extends z.ZodTypeAny ? z.infer<T> : unknown;
+  }
+
+  const parsedObj = object.safeParse(results[0].result);
+  if (!parsedObj.success) {
+    console.error("Error parsing response", parsedObj.error);
+    Sentry.captureException(parsedObj.error);
+  }
+  // should not fail in prod but just log an exception, see above
+  return results[0].result as z.infer<T>;
 };
 
 // cleans NULL characters from the event
@@ -456,24 +544,35 @@ export const sendToWorkerIfEnvironmentConfigured = async (
   batchResults: BatchResult[],
   projectId: string,
 ): Promise<void> => {
+  const traceEvents: TraceUpsertEventType[] = batchResults
+    .filter((result) => result.type === eventTypes.TRACE_CREATE) // we only have create, no update.
+    .map((result) =>
+      result.result &&
+      typeof result.result === "object" &&
+      "id" in result.result
+        ? // ingestion API only gets traces for one projectId
+          { traceId: result.result.id as string, projectId }
+        : null,
+    )
+    .filter(isNotNullOrUndefined);
+
   try {
-    if (
+    if (env.NEXT_PUBLIC_LANGFUSE_CLOUD_REGION && redis) {
+      console.log(`Sending ${traceEvents.length} events to worker via Redis`);
+
+      const queue = getTraceUpsertQueue();
+      if (!queue) {
+        console.error("TraceUpsertQueue not initialized");
+        return;
+      }
+
+      await queue.addBulk(convertTraceUpsertEventsToRedisEvents(traceEvents));
+    } else if (
       env.LANGFUSE_WORKER_HOST &&
       env.LANGFUSE_WORKER_PASSWORD &&
       env.NEXT_PUBLIC_LANGFUSE_CLOUD_REGION
     ) {
-      const traceEvents: TraceUpsertEventType[] = batchResults
-        .filter((result) => result.type === eventTypes.TRACE_CREATE) // we only have create, no update.
-        .map((result) =>
-          result.result &&
-          typeof result.result === "object" &&
-          "id" in result.result
-            ? // ingestion API only gets traces for one projectId
-              { traceId: result.result.id as string, projectId }
-            : null,
-        )
-        .filter(isNotNullOrUndefined);
-
+      console.log(`Sending ${traceEvents.length} events to worker via HTTP`);
       const body: EventBodyType = {
         name: EventName.TraceUpsert,
         payload: traceEvents,
@@ -491,10 +590,23 @@ export const sendToWorkerIfEnvironmentConfigured = async (
               ).toString("base64"),
           },
           body: JSON.stringify(body),
+          signal: AbortSignal.timeout(8 * 1000),
         });
       }
     }
   } catch (error) {
     console.error("Error sending events to worker", error);
   }
+};
+
+const gaugePrismaStats = async () => {
+  // execute with a 50% probability
+  if (Math.random() > 0.5) {
+    return;
+  }
+  const metrics = await prisma.$metrics.json();
+
+  metrics.gauges.forEach((gauge) => {
+    Sentry.metrics.gauge(gauge.key, gauge.value, gauge.labels);
+  });
 };

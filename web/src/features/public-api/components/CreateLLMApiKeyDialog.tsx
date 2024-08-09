@@ -40,7 +40,9 @@ import useProjectIdFromURL from "@/src/hooks/useProjectIdFromURL";
 const formSchema = z
   .object({
     secretKey: z.string().min(1),
-    provider: z.string().min(1),
+    provider: z
+      .string()
+      .min(1, "Please add a provider name that identifies this connection."),
     adapter: z.nativeEnum(LLMAdapter),
     baseURL: z.union([z.literal(""), z.string().url()]),
     withDefaultModels: z.boolean(),
@@ -240,8 +242,8 @@ export function CreateLLMApiKeyDialog() {
 
                   {currentAdapter === LLMAdapter.Azure && (
                     <FormDescription className="text-yellow-700">
-                      For Azure, please add the base URL in the following
-                      format:
+                      Please add the base URL in the following format (or
+                      compatible API):
                       https://&#123;instanceName&#125;.openai.azure.com/openai/deployments
                     </FormDescription>
                   )}

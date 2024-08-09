@@ -7,6 +7,8 @@ import { orderByToPrismaSql } from "@langfuse/shared";
 import { type ObservationView, Prisma } from "@langfuse/shared/src/db";
 import { prisma } from "@langfuse/shared/src/db";
 import { type GetAllGenerationsInput } from "../getAllQuery";
+import { filterAndValidateDbScoreList } from "@/src/features/public-api/types/scores";
+import { aggregateScores } from "@/src/features/scores/lib/aggregateScores";
 
 type AdditionalObservationFields = {
   traceName: string | null;
@@ -18,16 +20,17 @@ export type FullObservations = Array<
   AdditionalObservationFields & ObservationView
 >;
 
-export type IOOmittedObservations = Array<
-  Omit<ObservationView, "input" | "output"> & AdditionalObservationFields
+export type IOAndMetadataOmittedObservations = Array<
+  Omit<ObservationView, "input" | "output" | "metadata"> &
+    AdditionalObservationFields
 >;
 
 export async function getAllGenerations({
   input,
-  selectIO,
+  selectIOAndMetadata,
 }: {
   input: GetAllGenerationsInput;
-  selectIO: boolean;
+  selectIOAndMetadata: boolean;
 }) {
   const searchCondition = input.searchQuery
     ? Prisma.sql`AND (
@@ -51,7 +54,7 @@ export async function getAllGenerations({
 
   // to improve query performance, add timeseries filter to observation queries as well
   const startTimeFilter = input.filter.find(
-    (f) => f.column === "start_time" && f.type === "datetime",
+    (f) => f.column === "Start Time" && f.type === "datetime",
   );
   const datetimeFilter =
     startTimeFilter && startTimeFilter.type === "datetime"
@@ -78,7 +81,8 @@ export async function getAllGenerations({
           FROM
             scores
           WHERE
-            project_id = ${input.projectId}
+          project_id = ${input.projectId}
+          AND scores."data_type" IN ('NUMERIC', 'BOOLEAN')
           GROUP BY
             1,
             2,
@@ -96,8 +100,7 @@ export async function getAllGenerations({
         o."modelParameters",
         o.start_time as "startTime",
         o.end_time as "endTime",
-        ${selectIO ? Prisma.sql`o.input, o.output,` : Prisma.empty} 
-        o.metadata,
+        ${selectIOAndMetadata ? Prisma.sql`o.input, o.output, o.metadata,` : Prisma.empty} 
         o.trace_id as "traceId",
         t.name as "traceName",
         o.completion_start_time as "completionStartTime",
@@ -134,9 +137,10 @@ export async function getAllGenerations({
       LIMIT ${input.limit} OFFSET ${input.page * input.limit}
     `;
 
-  const generations: FullObservations | IOOmittedObservations = selectIO
-    ? await prisma.$queryRaw(query)
-    : await prisma.$queryRaw(query);
+  const generations: FullObservations | IOAndMetadataOmittedObservations =
+    selectIOAndMetadata
+      ? ((await prisma.$queryRaw(query)) as FullObservations)
+      : ((await prisma.$queryRaw(query)) as IOAndMetadataOmittedObservations);
 
   const scores = await prisma.score.findMany({
     where: {
@@ -146,10 +150,11 @@ export async function getAllGenerations({
       },
     },
   });
+  const validatedScores = filterAndValidateDbScoreList(scores);
 
   const fullGenerations = generations.map((generation) => {
-    const filteredScores = scores.filter(
-      (s) => s.observationId === generation.id,
+    const filteredScores = aggregateScores(
+      validatedScores.filter((s) => s.observationId === generation.id),
     );
     return {
       ...generation,

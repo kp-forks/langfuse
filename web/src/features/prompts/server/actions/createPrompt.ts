@@ -2,12 +2,13 @@ import {
   type CreatePromptTRPCType,
   PromptType,
 } from "@/src/features/prompts/server/utils/validation";
-import { ValidationError } from "@langfuse/shared";
+import { InvalidRequestError } from "@langfuse/shared";
 import { jsonSchema } from "@langfuse/shared";
 import { type PrismaClient } from "@langfuse/shared/src/db";
 import { LATEST_PROMPT_LABEL } from "@/src/features/prompts/constants";
 import { removeLabelsFromPreviousPromptVersions } from "@/src/features/prompts/server/utils/updatePromptLabels";
 import { updatePromptTagsOnAllVersions } from "@/src/features/prompts/server/utils/updatePromptTags";
+import { PromptService, redis } from "@langfuse/shared/src/server";
 
 export type CreatePromptParams = CreatePromptTRPCType & {
   createdBy: string;
@@ -31,7 +32,7 @@ export const createPrompt = async ({
   });
 
   if (latestPrompt && latestPrompt.type !== type) {
-    throw new ValidationError(
+    throw new InvalidRequestError(
       "Previous versions have different prompt type. Create a new prompt with a different name.",
     );
   }
@@ -82,7 +83,16 @@ export const createPrompt = async ({
       })),
     );
 
+  // Lock and invalidate cache for _all_ versions and labels of the prompt name
+  const promptService = new PromptService(prisma, redis);
+  await promptService.lockCache({ projectId, promptName: name });
+  await promptService.invalidateCache({ projectId, promptName: name });
+
+  // Create prompt and update previous prompt versions
   const [createdPrompt] = await prisma.$transaction(create);
+
+  // Unlock cache
+  await promptService.unlockCache({ projectId, promptName: name });
 
   return createdPrompt;
 };
