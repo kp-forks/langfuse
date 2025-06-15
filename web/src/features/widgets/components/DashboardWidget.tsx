@@ -5,7 +5,7 @@ import {
   type metricAggregations,
   mapLegacyUiTableFilterToView,
 } from "@/src/features/query";
-import { type z } from "zod";
+import { type z } from "zod/v4";
 import { Chart } from "@/src/features/widgets/chart-library/Chart";
 import { type FilterState } from "@langfuse/shared";
 import { isTimeSeriesChart } from "@/src/features/widgets/chart-library/utils";
@@ -93,6 +93,7 @@ export function DashboardWidget({
         fromTimestamp: fromTimestamp.toISOString(),
         toTimestamp: toTimestamp.toISOString(),
         orderBy: null,
+        chartConfig: widget.data?.chartConfig,
       },
     },
     {
@@ -119,6 +120,7 @@ export function DashboardWidget({
         agg: "count",
       };
       const metricField = `${metric.agg}_${metric.measure}`;
+      const metricValue = item[metricField];
 
       return {
         dimension:
@@ -133,7 +135,9 @@ export function DashboardWidget({
                 return String(val);
               })()
             : startCase(metricField === "count_count" ? "Count" : metricField),
-        metric: Number(item[metricField] || 0),
+        metric: Array.isArray(metricValue)
+          ? metricValue
+          : Number(metricValue || 0),
         time_dimension: item["time_dimension"],
       };
     });
