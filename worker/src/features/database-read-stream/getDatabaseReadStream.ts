@@ -6,6 +6,7 @@ import {
   ScoreDomain,
   evalDatasetFormFilterCols,
   OrderByState,
+  TracingSearchType,
 } from "@langfuse/shared";
 import { prisma } from "@langfuse/shared/src/db";
 import {
@@ -34,6 +35,8 @@ const tableNameToTimeFilterColumn: Record<BatchTableNames, string> = {
   traces: "timestamp",
   observations: "startTime",
   dataset_run_items: "createdAt",
+  dataset_items: "createdAt",
+  audit_logs: "createdAt",
 };
 const tableNameToTimeFilterColumnCh: Record<BatchTableNames, string> = {
   scores: "timestamp",
@@ -41,6 +44,8 @@ const tableNameToTimeFilterColumnCh: Record<BatchTableNames, string> = {
   traces: "timestamp",
   observations: "startTime",
   dataset_run_items: "createdAt",
+  dataset_items: "createdAt",
+  audit_logs: "createdAt",
 };
 const isGenerationTimestampFilter = (
   filter: FilterCondition,
@@ -86,10 +91,14 @@ export const getDatabaseReadStream = async ({
   filter,
   orderBy,
   cutoffCreatedAt,
+  searchQuery,
+  searchType,
   rowLimit = env.BATCH_EXPORT_ROW_LIMIT,
 }: {
   projectId: string;
   cutoffCreatedAt: Date;
+  searchQuery?: string;
+  searchType?: TracingSearchType[];
   rowLimit?: number;
 } & BatchExportQueryType): Promise<DatabaseReadStream<unknown>> => {
   // Set createdAt cutoff to prevent exporting data that was created after the job was queued
@@ -237,7 +246,9 @@ export const getDatabaseReadStream = async ({
             filter: filter
               ? [...filter, createdAtCutoffFilterCh]
               : [createdAtCutoffFilterCh],
-            orderBy: orderBy,
+            searchQuery,
+            searchType: searchType ?? ["id" as const],
+            orderBy,
             selectIOAndMetadata: true,
             clickhouseConfigs,
           });
@@ -291,7 +302,8 @@ export const getDatabaseReadStream = async ({
             filter: filter
               ? [...filter, createdAtCutoffFilter]
               : [createdAtCutoffFilter],
-            searchType: ["id" as const],
+            searchQuery,
+            searchType: searchType ?? ["id" as const],
             orderBy,
             limit: pageSize,
             page: Math.floor(offset / pageSize),
@@ -425,6 +437,121 @@ export const getDatabaseReadStream = async ({
         rowLimit,
       );
     }
+
+    case "dataset_items": {
+      return new DatabaseReadStream<unknown>(
+        async (pageSize: number, offset: number) => {
+          const condition = tableColumnsToSqlFilterAndPrefix(
+            filter ?? [],
+            evalDatasetFormFilterCols,
+            "dataset_items",
+          );
+
+          const items = await prisma.$queryRaw<
+            Array<{
+              id: string;
+              project_id: string;
+              dataset_id: string;
+              dataset_name: string;
+              status: string;
+              input: unknown;
+              expected_output: unknown;
+              metadata: unknown;
+              source_trace_id: string | null;
+              source_observation_id: string | null;
+              created_at: Date;
+              updated_at: Date;
+            }>
+          >`
+            SELECT 
+              di.id,
+              di.project_id,
+              di.dataset_id,
+              d.name as dataset_name,
+              di.status,
+              di.input,
+              di.expected_output,
+              di.metadata,
+              di.source_trace_id,
+              di.source_observation_id,
+              di.created_at,
+              di.updated_at
+            FROM dataset_items di 
+              JOIN datasets d ON di.dataset_id = d.id AND di.project_id = d.project_id
+            WHERE di.project_id = ${projectId}
+            AND di.created_at < ${cutoffCreatedAt}
+            ${condition}
+            ORDER BY di.created_at DESC
+            LIMIT ${pageSize}
+            OFFSET ${offset}
+          `;
+
+          return items.map((item) => ({
+            id: item.id,
+            projectId: item.project_id,
+            datasetId: item.dataset_id,
+            datasetName: item.dataset_name,
+            status: item.status,
+            input: item.input,
+            expectedOutput: item.expected_output,
+            metadata: item.metadata,
+            htmlSourcePath: item.source_trace_id
+              ? `/project/${projectId}/traces/${item.source_trace_id}${
+                  item.source_observation_id
+                    ? `?observation=${item.source_observation_id}`
+                    : ""
+                }`
+              : "",
+            sourceTraceId: item.source_trace_id,
+            sourceObservationId: item.source_observation_id,
+            createdAt: item.created_at,
+            updatedAt: item.updated_at,
+          }));
+        },
+        env.BATCH_EXPORT_PAGE_SIZE,
+        rowLimit,
+      );
+    }
+
+    case "audit_logs": {
+      return new DatabaseReadStream<unknown>(
+        async (pageSize: number, offset: number) => {
+          const auditLogs = await prisma.auditLog.findMany({
+            where: {
+              projectId: projectId,
+              createdAt: {
+                lt: cutoffCreatedAt,
+              },
+            },
+            orderBy: {
+              createdAt: "desc",
+            },
+            skip: offset,
+            take: pageSize,
+          });
+
+          return auditLogs.map((log) => ({
+            id: log.id,
+            createdAt: log.createdAt,
+            updatedAt: log.updatedAt,
+            type: log.type,
+            apiKeyId: log.apiKeyId,
+            userId: log.userId,
+            orgId: log.orgId,
+            userOrgRole: log.userOrgRole,
+            projectId: log.projectId,
+            userProjectRole: log.userProjectRole,
+            resourceType: log.resourceType,
+            resourceId: log.resourceId,
+            action: log.action,
+            before: log.before,
+            after: log.after,
+          }));
+        },
+        env.BATCH_EXPORT_PAGE_SIZE,
+        rowLimit,
+      );
+    }
     default:
       throw new Error(`Unhandled table case: ${tableName}`);
   }
@@ -473,9 +600,19 @@ export const getTraceIdentifierStream = async (props: {
   cutoffCreatedAt: Date;
   filter: FilterCondition[];
   orderBy: OrderByState;
+  searchQuery?: string;
+  searchType?: TracingSearchType[];
   rowLimit?: number;
 }): Promise<DatabaseReadStream<Array<TraceIdentifiers>>> => {
-  const { projectId, cutoffCreatedAt, filter, orderBy, rowLimit } = props;
+  const {
+    projectId,
+    cutoffCreatedAt,
+    filter,
+    orderBy,
+    searchQuery,
+    searchType,
+    rowLimit,
+  } = props;
 
   const createdAtCutoffFilter: FilterCondition = {
     column: "timestamp",
@@ -495,7 +632,8 @@ export const getTraceIdentifierStream = async (props: {
         filter: filter
           ? [...filter, createdAtCutoffFilter]
           : [createdAtCutoffFilter],
-        searchType: ["id" as const],
+        searchQuery,
+        searchType: searchType ?? ["id" as const],
         orderBy,
         limit: pageSize,
         page: Math.floor(offset / pageSize),

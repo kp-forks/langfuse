@@ -1,7 +1,7 @@
 import { Terminal } from "lucide-react";
 import { useEffect, useState, useMemo } from "react";
 import { useRouter } from "next/router";
-import { z } from "zod";
+import { z } from "zod/v4";
 
 import { createEmptyMessage } from "@/src/components/ChatMessages/utils/createEmptyMessage";
 import { Button } from "@/src/components/ui/button";
@@ -12,7 +12,6 @@ import {
   type PlaygroundSchema,
 } from "@/src/features/playground/page/types";
 import { usePostHogClientCapture } from "@/src/features/posthog-analytics/usePostHogClientCapture";
-import { PromptType } from "@/src/features/prompts/server/utils/validation";
 import useProjectIdFromURL from "@/src/hooks/useProjectIdFromURL";
 import {
   ChatMessageRole,
@@ -28,6 +27,7 @@ import {
   type ChatMessage,
   OpenAIResponseFormatSchema,
   type Prisma,
+  PromptType,
 } from "@langfuse/shared";
 import { api } from "@/src/utils/api";
 import { cn } from "@/src/utils/tailwind";
@@ -139,7 +139,7 @@ export const JumpToPlaygroundButton: React.FC<JumpToPlaygroundButtonProps> = (
 
 const ParsedChatMessageListSchema = z.array(
   z.object({
-    role: z.nativeEnum(ChatMessageRole),
+    role: z.enum(ChatMessageRole),
     content: z.union([
       z.string(),
       z

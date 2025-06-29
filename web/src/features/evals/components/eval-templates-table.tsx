@@ -290,10 +290,8 @@ export default function EvalsTemplateTable({
       columns,
     );
 
-  const urlPathname = `/project/${projectId}/evals/templates`;
-  const { getNavigationPath, expandPeek } =
-    useEvalTemplatesPeekNavigation(urlPathname);
-  const { setPeekView } = usePeekState(urlPathname);
+  const { getNavigationPath, expandPeek } = useEvalTemplatesPeekNavigation();
+  const { setPeekView } = usePeekState();
 
   const convertToTableRow = (
     template: RouterOutputs["evals"]["templateNames"]["templates"][number],
@@ -330,7 +328,6 @@ export default function EvalsTemplateTable({
         peekView={{
           itemType: "EVALUATOR",
           listKey: "eval-templates",
-          urlPathname,
           onOpenChange: setPeekView,
           onExpand: expandPeek,
           shouldUpdateRowOnDetailPageNavigation: true,
@@ -377,10 +374,13 @@ export default function EvalsTemplateTable({
         }}
       >
         <DialogContent className="max-h-[90vh] max-w-screen-md overflow-y-auto">
-          <DialogTitle>Edit evaluator</DialogTitle>
+          <DialogHeader>
+            <DialogTitle>Edit evaluator</DialogTitle>
+          </DialogHeader>
           <EvalTemplateForm
             projectId={projectId}
             preventRedirect={true}
+            useDialog={true}
             isEditing={true}
             existingEvalTemplate={template.data ?? undefined}
             onFormSuccess={() => {
@@ -404,10 +404,13 @@ export default function EvalsTemplateTable({
         }}
       >
         <DialogContent className="max-h-[90vh] max-w-screen-md overflow-y-auto">
-          <DialogTitle>Clone evaluator</DialogTitle>
+          <DialogHeader>
+            <DialogTitle>Clone evaluator</DialogTitle>
+          </DialogHeader>
           <EvalTemplateForm
             projectId={projectId}
             preventRedirect={true}
+            useDialog={true}
             isEditing={true}
             existingEvalTemplate={
               cloneTemplate.data

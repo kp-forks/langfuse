@@ -2,11 +2,12 @@ import React, { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { ArrowUpRight } from "lucide-react";
-import * as z from "zod";
+import * as z from "zod/v4";
 
 import { Button } from "@/src/components/ui/button";
 import {
   Dialog,
+  DialogBody,
   DialogContent,
   DialogDescription,
   DialogFooter,
@@ -64,7 +65,7 @@ export const CreateOrEditLLMToolDialog: React.FC<CreateOrEditLLMToolDialog> = (
 
   const [open, setOpen] = useState(false);
 
-  const form = useForm<FormValues>({
+  const form = useForm({
     resolver: zodResolver(formSchema),
     defaultValues: props.defaultValues ?? {
       name: "",
@@ -164,95 +165,97 @@ export const CreateOrEditLLMToolDialog: React.FC<CreateOrEditLLMToolDialog> = (
         <Form {...form}>
           <form
             onSubmit={form.handleSubmit(onSubmit)}
-            className="flex flex-1 flex-col"
+            className="grid max-h-full min-h-0 overflow-hidden"
           >
-            <div className="flex-1 space-y-4 overflow-y-auto">
-              <FormField
-                control={form.control}
-                name="name"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Name</FormLabel>
-                    <FormControl>
-                      <Input placeholder="e.g., get_weather" {...field} />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
+            <DialogBody>
+              <div className="flex-1 space-y-4 overflow-y-auto">
+                <FormField
+                  control={form.control}
+                  name="name"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Name</FormLabel>
+                      <FormControl>
+                        <Input placeholder="e.g., get_weather" {...field} />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
 
-              <FormField
-                control={form.control}
-                name="description"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Description</FormLabel>
-                    <FormDescription>
-                      This description will be sent to the LLM to help it
-                      understand the tool&apos;s purpose and functionality.
-                    </FormDescription>
-                    <FormControl>
-                      <Textarea
-                        placeholder="Describe the tool's purpose and usage"
-                        className="max-h-[120px] focus:ring-0 focus:ring-offset-0 focus-visible:ring-0 focus-visible:ring-offset-0"
-                        {...field}
-                        onKeyDown={(e) => {
-                          e.stopPropagation();
-                        }}
-                      />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-
-              <FormField
-                control={form.control}
-                name="parameters"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Parameters (JSON Schema)</FormLabel>
-                    <FormDescription>
-                      Define the structure of your tool parameters using JSON
-                      Schema format.{" "}
-                      <a
-                        href="https://json-schema.org/learn/miscellaneous-examples"
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="flex items-center"
-                      >
-                        See JSON Schema examples here
-                        <ArrowUpRight className="h-3 w-3" />
-                      </a>
-                    </FormDescription>
-                    <FormControl>
-                      <div className="relative flex flex-col gap-1">
-                        <CodeMirrorEditor
-                          value={field.value}
-                          onChange={field.onChange}
-                          mode="json"
-                          minHeight={200}
-                          className="max-h-[25vh]"
+                <FormField
+                  control={form.control}
+                  name="description"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Description</FormLabel>
+                      <FormDescription>
+                        This description will be sent to the LLM to help it
+                        understand the tool&apos;s purpose and functionality.
+                      </FormDescription>
+                      <FormControl>
+                        <Textarea
+                          placeholder="Describe the tool's purpose and usage"
+                          className="max-h-[120px] focus:ring-0 focus:ring-offset-0 focus-visible:ring-0 focus-visible:ring-offset-0"
+                          {...field}
+                          onKeyDown={(e) => {
+                            e.stopPropagation();
+                          }}
                         />
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          onClick={prettifyJson}
-                          className="absolute right-3 top-3 text-xs"
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
+                <FormField
+                  control={form.control}
+                  name="parameters"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Parameters (JSON Schema)</FormLabel>
+                      <FormDescription>
+                        Define the structure of your tool parameters using JSON
+                        Schema format.{" "}
+                        <a
+                          href="https://json-schema.org/learn/miscellaneous-examples"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex items-center"
                         >
-                          Prettify
-                        </Button>
-                      </div>
-                    </FormControl>
-                    <p className="text-xs text-muted-foreground">
-                      Parameters must be a valid JSON Schema object
-                    </p>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-            </div>
+                          See JSON Schema examples here
+                          <ArrowUpRight className="h-3 w-3" />
+                        </a>
+                      </FormDescription>
+                      <FormControl>
+                        <div className="relative flex flex-col gap-1">
+                          <CodeMirrorEditor
+                            value={field.value}
+                            onChange={field.onChange}
+                            mode="json"
+                            minHeight={200}
+                            className="max-h-[25vh]"
+                          />
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={prettifyJson}
+                            className="absolute right-3 top-3 text-xs"
+                          >
+                            Prettify
+                          </Button>
+                        </div>
+                      </FormControl>
+                      <p className="text-xs text-muted-foreground">
+                        Parameters must be a valid JSON Schema object
+                      </p>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              </div>
+            </DialogBody>
 
             <DialogFooter className="sticky bottom-0 mt-4 flex flex-col gap-2 border-t bg-background pt-4">
               <div className="flex w-full flex-col gap-2">

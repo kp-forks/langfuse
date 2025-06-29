@@ -10,7 +10,6 @@ import React, {
 import { v4 as uuidv4 } from "uuid";
 
 import { createEmptyMessage } from "@/src/components/ChatMessages/utils/createEmptyMessage";
-import useCommandEnter from "@/src/features/playground/page/hooks/useCommandEnter";
 import { useModelParams } from "@/src/features/playground/page/hooks/useModelParams";
 import usePlaygroundCache from "@/src/features/playground/page/hooks/usePlaygroundCache";
 import { usePostHogClientCapture } from "@/src/features/posthog-analytics/usePostHogClientCapture";
@@ -52,7 +51,7 @@ type PlaygroundContextType = {
   outputJson: string;
   outputToolCalls: LLMToolCall[];
 
-  handleSubmit: () => Promise<void>;
+  handleSubmit: (streaming?: boolean) => Promise<void>;
   isStreaming: boolean;
 } & ModelParamsContext &
   MessagesContext;
@@ -257,8 +256,8 @@ export const PlaygroundProvider: React.FC<PropsWithChildren> = ({
     [],
   );
 
-  const handleSubmit: PlaygroundContextType["handleSubmit"] =
-    useCallback(async () => {
+  const handleSubmit: PlaygroundContextType["handleSubmit"] = useCallback(
+    async (streaming = true) => {
       try {
         setIsStreaming(true);
         setOutput("");
@@ -291,6 +290,7 @@ export const PlaygroundProvider: React.FC<PropsWithChildren> = ({
             finalMessages,
             modelParams,
             tools,
+            streaming,
           );
 
           const displayContent =
@@ -310,18 +310,28 @@ export const PlaygroundProvider: React.FC<PropsWithChildren> = ({
             finalMessages,
             modelParams,
             structuredOutputSchema,
+            streaming,
           );
 
           setOutput(response);
         } else {
-          const completionStream = getChatCompletionStream(
-            projectId,
-            finalMessages,
-            modelParams,
-          );
+          if (streaming) {
+            const completionStream = getChatCompletionStream(
+              projectId,
+              finalMessages,
+              modelParams,
+            );
 
-          for await (const token of completionStream) {
-            response += token;
+            for await (const token of completionStream) {
+              response += token;
+              setOutput(response);
+            }
+          } else {
+            response = await getChatCompletionNonStreaming(
+              projectId,
+              finalMessages,
+              modelParams,
+            );
             setOutput(response);
           }
         }
@@ -352,14 +362,13 @@ export const PlaygroundProvider: React.FC<PropsWithChildren> = ({
           isStructuredOutput: Boolean(structuredOutputSchema),
         });
       } catch (err) {
-        console.error(err);
-
         alert(err instanceof Error ? err.message : "An error occurred");
         // TODO: add error handling via toast
       } finally {
         setIsStreaming(false);
       }
-    }, [
+    },
+    [
       messages,
       modelParams,
       promptVariables,
@@ -368,9 +377,10 @@ export const PlaygroundProvider: React.FC<PropsWithChildren> = ({
       setPlaygroundCache,
       structuredOutputSchema,
       projectId,
-    ]);
+    ],
+  );
 
-  useCommandEnter(!isStreaming, handleSubmit);
+  // Command enter handling moved to Messages component to access streaming preference
 
   const updatePromptVariableValue = useCallback(
     (variable: string, value: string) => {
@@ -430,6 +440,7 @@ async function getChatCompletionWithTools(
   messages: ChatMessageWithId[],
   modelParams: UIModelParams,
   tools: unknown[],
+  streaming: boolean = false,
 ): Promise<ToolCallResponse> {
   if (!projectId) throw Error("Project ID is not set");
 
@@ -438,6 +449,7 @@ async function getChatCompletionWithTools(
     messages,
     modelParams: getFinalModelParams(modelParams),
     tools,
+    streaming,
   });
   const result = await fetch(
     `${env.NEXT_PUBLIC_BASE_PATH ?? ""}/api/chatCompletion`,
@@ -469,6 +481,7 @@ async function getChatCompletionWithStructuredOutput(
   messages: ChatMessageWithId[],
   modelParams: UIModelParams,
   structuredOutputSchema: PlaygroundSchema | null,
+  streaming: boolean = false,
 ): Promise<string> {
   if (!projectId) throw Error("Project ID is not set");
 
@@ -477,6 +490,7 @@ async function getChatCompletionWithStructuredOutput(
     messages,
     modelParams: getFinalModelParams(modelParams),
     structuredOutputSchema: structuredOutputSchema?.schema,
+    streaming,
   });
 
   const result = await fetch(
@@ -517,6 +531,7 @@ async function* getChatCompletionStream(
     projectId,
     messages,
     modelParams: getFinalModelParams(modelParams),
+    streaming: true,
   });
   const result = await fetch(
     `${env.NEXT_PUBLIC_BASE_PATH ?? ""}/api/chatCompletion`,
@@ -553,6 +568,40 @@ async function* getChatCompletionStream(
   } finally {
     reader.releaseLock();
   }
+}
+
+async function getChatCompletionNonStreaming(
+  projectId: string | undefined,
+  messages: ChatMessageWithId[],
+  modelParams: UIModelParams,
+): Promise<string> {
+  if (!projectId) {
+    throw new Error("Project ID is not set");
+  }
+
+  const body = JSON.stringify({
+    projectId,
+    messages,
+    modelParams: getFinalModelParams(modelParams),
+    streaming: false,
+  });
+
+  const result = await fetch(
+    `${env.NEXT_PUBLIC_BASE_PATH ?? ""}/api/chatCompletion`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body,
+    },
+  );
+
+  if (!result.ok) {
+    const errorData = await result.json();
+    throw new Error(`Completion failed: ${errorData.message}`);
+  }
+
+  const responseData = await result.json();
+  return responseData.content || "";
 }
 
 function getFinalMessages(

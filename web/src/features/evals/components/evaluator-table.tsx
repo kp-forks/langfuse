@@ -18,7 +18,7 @@ import {
   useQueryParam,
   StringParam,
 } from "use-query-params";
-import { z } from "zod";
+import { z } from "zod/v4";
 import { generateJobExecutionCounts } from "@/src/features/evals/utils/job-execution-utils";
 import { useOrderByState } from "@/src/features/orderBy/hooks/useOrderByState";
 import TableIdOrName from "@/src/components/table/table-id";
@@ -35,7 +35,12 @@ import {
 } from "@/src/components/ui/dropdown-menu";
 import { Button } from "@/src/components/ui/button";
 import { showSuccessToast } from "@/src/features/notifications/showSuccessToast";
-import { Dialog, DialogContent, DialogTitle } from "@/src/components/ui/dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/src/components/ui/dialog";
 import { EvaluatorForm } from "@/src/features/evals/components/evaluator-form";
 import { useRouter } from "next/router";
 import { DeleteEvalConfigButton } from "@/src/components/deleteButton";
@@ -313,9 +318,8 @@ export default function EvaluatorTable({ projectId }: { projectId: string }) {
       columns,
     );
 
-  const urlPathname = `/project/${projectId}/evals`;
-  const { getNavigationPath } = useRunningEvaluatorsPeekNavigation(urlPathname);
-  const { setPeekView } = usePeekState(urlPathname);
+  const { getNavigationPath } = useRunningEvaluatorsPeekNavigation();
+  const { setPeekView } = usePeekState();
 
   const convertToTableRow = (
     jobConfig: RouterOutputs["evals"]["allConfigs"]["configs"][number],
@@ -371,7 +375,6 @@ export default function EvaluatorTable({ projectId }: { projectId: string }) {
         peekView={{
           itemType: "RUNNING_EVALUATOR",
           listKey: "evals",
-          urlPathname,
           onOpenChange: setPeekView,
           shouldUpdateRowOnDetailPageNavigation: true,
           peekEventOptions: {
@@ -419,7 +422,9 @@ export default function EvaluatorTable({ projectId }: { projectId: string }) {
         }}
       >
         <DialogContent className="max-h-[90vh] max-w-screen-xl overflow-y-auto">
-          <DialogTitle>Edit configuration</DialogTitle>
+          <DialogHeader>
+            <DialogTitle>Edit configuration</DialogTitle>
+          </DialogHeader>
           {existingEvaluator.isLoading ? (
             <div className="flex items-center justify-center p-4">
               <Loader2 className="h-6 w-6 animate-spin" />
@@ -439,6 +444,7 @@ export default function EvaluatorTable({ projectId }: { projectId: string }) {
                   : undefined
               }
               shouldWrapVariables={true}
+              useDialog={true}
               mode="edit"
               onFormSuccess={() => {
                 setEditConfigId(null);

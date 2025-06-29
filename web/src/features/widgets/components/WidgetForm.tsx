@@ -25,7 +25,7 @@ import {
 import { WidgetPropertySelectItem } from "@/src/features/widgets/components/WidgetPropertySelectItem";
 import { Label } from "@/src/components/ui/label";
 import { viewDeclarations } from "@/src/features/query/dataModel";
-import { type z } from "zod";
+import { type z } from "zod/v4";
 import { views } from "@/src/features/query/types";
 import { Input } from "@/src/components/ui/input";
 import { startCase } from "lodash";
@@ -46,6 +46,7 @@ import {
   LineChart,
   BarChartHorizontal,
   Hash,
+  BarChart3,
 } from "lucide-react";
 import {
   buildWidgetName,
@@ -98,6 +99,13 @@ const chartTypes: ChartType[] = [
   },
   {
     group: "total-value",
+    name: "Histogram",
+    value: "HISTOGRAM",
+    icon: BarChart3,
+    supportsBreakdown: false,
+  },
+  {
+    group: "total-value",
     name: "Pie Chart",
     value: "PIE",
     icon: PieChart,
@@ -120,7 +128,11 @@ export function WidgetForm({
     dimension: string;
     filters?: FilterState;
     chartType: DashboardWidgetChartType;
-    chartConfig?: { type: DashboardWidgetChartType; row_limit?: number };
+    chartConfig?: {
+      type: DashboardWidgetChartType;
+      row_limit?: number;
+      bins?: number;
+    };
   };
   projectId: string;
   onSave: (widgetData: {
@@ -131,7 +143,11 @@ export function WidgetForm({
     metrics: { measure: string; agg: string }[];
     filters: any[];
     chartType: DashboardWidgetChartType;
-    chartConfig: { type: DashboardWidgetChartType; row_limit?: number };
+    chartConfig: {
+      type: DashboardWidgetChartType;
+      row_limit?: number;
+      bins?: number;
+    };
   }) => void;
   widgetId?: string;
 }) {
@@ -166,12 +182,29 @@ export function WidgetForm({
   const [rowLimit, setRowLimit] = useState<number>(
     initialValues.chartConfig?.row_limit ?? 100,
   );
+  const [histogramBins, setHistogramBins] = useState<number>(
+    initialValues.chartConfig?.bins ?? 10,
+  );
 
   // Filter state
   const { selectedOption, dateRange, setDateRangeAndOption } =
     useDashboardDateRange({ defaultRelativeAggregation: "7 days" });
   const [userFilterState, setUserFilterState] = useState<FilterState>(
-    initialValues.filters ?? [],
+    initialValues.filters?.map((filter) => {
+      if (filter.column === "name") {
+        // We need to map the generic `name` property to the correct column name for the selected view
+        return {
+          ...filter,
+          column:
+            initialValues.view === "traces"
+              ? "traceName"
+              : initialValues.view === "observations"
+                ? "observationName"
+                : "scoreName",
+        };
+      }
+      return filter;
+    }) ?? [],
   );
 
   const traceFilterOptions = api.traces.filterOptions.useQuery(
@@ -291,12 +324,35 @@ export function WidgetForm({
     }
   }, [selectedChartType, selectedDimension]);
 
-  // Set aggregation to "count" when metric is "count"
+  // Set aggregation based on chart type and metric, with histogram chart type taking priority
   useEffect(() => {
-    if (selectedMeasure === "count" && selectedAggregation !== "count") {
+    // Histogram chart type always takes priority
+    if (
+      selectedChartType === "HISTOGRAM" &&
+      selectedAggregation !== "histogram"
+    ) {
+      setSelectedAggregation("histogram");
+    }
+    // If switching away from histogram chart type and aggregation is still histogram, reset to appropriate default
+    else if (
+      selectedChartType !== "HISTOGRAM" &&
+      selectedAggregation === "histogram"
+    ) {
+      if (selectedMeasure === "count") {
+        setSelectedAggregation("count");
+      } else {
+        setSelectedAggregation("sum"); // Default aggregation for non-count metrics
+      }
+    }
+    // Only set to "count" for count metric if not using histogram chart type
+    else if (
+      selectedMeasure === "count" &&
+      selectedChartType !== "HISTOGRAM" &&
+      selectedAggregation !== "count"
+    ) {
       setSelectedAggregation("count");
     }
-  }, [selectedMeasure, selectedAggregation]);
+  }, [selectedMeasure, selectedAggregation, selectedChartType]);
 
   // Get available metrics for the selected view
   const availableMetrics = useMemo(() => {
@@ -336,7 +392,12 @@ export function WidgetForm({
       view: selectedView,
       dimensions:
         selectedDimension !== "none" ? [{ field: selectedDimension }] : [],
-      metrics: [{ measure: selectedMeasure, aggregation: selectedAggregation }],
+      metrics: [
+        {
+          measure: selectedMeasure,
+          aggregation: selectedAggregation,
+        },
+      ],
       filters: [...mapLegacyUiTableFilterToView(selectedView, userFilterState)],
       timeDimension: isTimeSeriesChart(
         selectedChartType as DashboardWidgetChartType,
@@ -346,6 +407,10 @@ export function WidgetForm({
       fromTimestamp: fromTimestamp.toISOString(),
       toTimestamp: toTimestamp.toISOString(),
       orderBy: null,
+      chartConfig:
+        selectedChartType === "HISTOGRAM"
+          ? { type: selectedChartType, bins: histogramBins }
+          : { type: selectedChartType },
     };
   }, [
     selectedView,
@@ -355,6 +420,7 @@ export function WidgetForm({
     userFilterState,
     dateRange,
     selectedChartType,
+    histogramBins,
   ]);
 
   const queryResult = api.dashboard.executeQuery.useQuery(
@@ -379,6 +445,7 @@ export function WidgetForm({
         const dimensionField = selectedDimension;
         // Get the metric field (first metric in the query with its aggregation)
         const metricField = `${selectedAggregation}_${selectedMeasure}`;
+        const metric = item[metricField];
 
         return {
           dimension:
@@ -394,7 +461,7 @@ export function WidgetForm({
               : startCase(
                   metricField === "count_count" ? "Count" : metricField,
                 ),
-          metric: Number(item[metricField] || 0),
+          metric: Array.isArray(metric) ? metric : Number(metric || 0),
           time_dimension: item["time_dimension"],
         };
       }) ?? [],
@@ -413,17 +480,27 @@ export function WidgetForm({
       view: selectedView,
       dimensions:
         selectedDimension !== "none" ? [{ field: selectedDimension }] : [],
-      metrics: [{ measure: selectedMeasure, agg: selectedAggregation }],
+      metrics: [
+        {
+          measure: selectedMeasure,
+          agg: selectedAggregation,
+        },
+      ],
       filters: mapLegacyUiTableFilterToView(selectedView, userFilterState),
       chartType: selectedChartType as DashboardWidgetChartType,
       chartConfig: isTimeSeriesChart(
         selectedChartType as DashboardWidgetChartType,
       )
         ? { type: selectedChartType as DashboardWidgetChartType }
-        : {
-            type: selectedChartType as DashboardWidgetChartType,
-            row_limit: rowLimit,
-          },
+        : selectedChartType === "HISTOGRAM"
+          ? {
+              type: selectedChartType as DashboardWidgetChartType,
+              bins: histogramBins,
+            }
+          : {
+              type: selectedChartType as DashboardWidgetChartType,
+              row_limit: rowLimit,
+            },
     });
   };
 
@@ -545,25 +622,34 @@ export function WidgetForm({
                   </SelectContent>
                 </Select>
                 {selectedMeasure !== "count" && (
-                  <Select
-                    value={selectedAggregation}
-                    onValueChange={(value) =>
-                      setSelectedAggregation(
-                        value as z.infer<typeof metricAggregations>,
-                      )
-                    }
-                  >
-                    <SelectTrigger id="aggregation-select">
-                      <SelectValue placeholder="Select Aggregation" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {metricAggregations.options.map((aggregation) => (
-                        <SelectItem key={aggregation} value={aggregation}>
-                          {startCase(aggregation)}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <div className="space-y-1">
+                    <Select
+                      value={selectedAggregation}
+                      disabled={selectedChartType === "HISTOGRAM"} // Disable when histogram chart type is selected
+                      onValueChange={(value) =>
+                        setSelectedAggregation(
+                          value as z.infer<typeof metricAggregations>,
+                        )
+                      }
+                    >
+                      <SelectTrigger id="aggregation-select">
+                        <SelectValue placeholder="Select Aggregation" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {metricAggregations.options.map((aggregation) => (
+                          <SelectItem key={aggregation} value={aggregation}>
+                            {startCase(aggregation)}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    {selectedChartType === "HISTOGRAM" && (
+                      <p className="text-xs text-muted-foreground">
+                        Aggregation is automatically set to
+                        &quot;histogram&quot; for histogram charts
+                      </p>
+                    )}
+                  </div>
                 )}
               </div>
 
@@ -703,6 +789,27 @@ export function WidgetForm({
                   className="w-full"
                 />
               </div>
+
+              {/* Histogram Bins Selection - Only shown for HISTOGRAM chart type */}
+              {selectedChartType === "HISTOGRAM" && (
+                <div className="space-y-2">
+                  <Label htmlFor="histogram-bins">Number of Bins (1-100)</Label>
+                  <Input
+                    id="histogram-bins"
+                    type="number"
+                    min={1}
+                    max={100}
+                    value={histogramBins}
+                    onChange={(e) => {
+                      const value = parseInt(e.target.value);
+                      if (!isNaN(value) && value >= 1 && value <= 100) {
+                        setHistogramBins(value);
+                      }
+                    }}
+                    placeholder="Enter number of bins (1-100)"
+                  />
+                </div>
+              )}
 
               {/* Row Limit Selection - Only shown for non-time series charts that support breakdown */}
               {chartTypes.find((c) => c.value === selectedChartType)
